@@ -1,0 +1,21 @@
+locations:
+  Home:
+    lat: 25.033964
+    lng: 121.564472
+    tags: [Taipei, outdoor]
+    timezone: Asia/Taipei
+    note: Taipei 101
+
+  Office:
+    lat: 25.047924
+    lng: 121.517081
+    tags: [Taipei, indoor]
+    timezone: Asia/Taipei
+    note: Taipei Main Station
+
+  Test_Site:
+    lat: 25.085110
+    lng: 121.561680
+    tags: [Taipei, night_market]
+    timezone: Asia/Taipei
+    note: Shilin Night Market
