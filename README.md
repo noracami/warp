@@ -1,9 +1,11 @@
 # Mock GPS
 
-透過電腦端 ADB 遠端控制 Android 手機的 GPS 定位。本專案包含兩部分：
+遠端控制 Android 手機的 GPS 定位。目前正在從 ADB broadcast 架構遷移到 LAN HTTP 架構（見 [`features/`](features/)）。
 
-- **Python CLI / TUI**（`main.py`、`tui.py`）——在電腦端發送 ADB broadcast 指令
-- **Android 端 Mock GPS app**（`android/`）——接收 broadcast，透過 Android `LocationManager` test provider 機制模擬位置
+> ⚠️ **Migration in progress**：Android app 已改為 HTTP server（port 8080）。Python CLI / TUI 目前**暫時無法使用**，待 Phase 1b 完成才會接上 HTTP。下方 CLI / TUI 使用說明是舊版內容，僅供歷史參考。
+
+- **Android 端 Mock GPS app**（`android/`）——HTTP server，接收 `POST /teleport` / `POST /stop`，透過 Android `LocationManager` test provider 模擬位置
+- **Python CLI / TUI**（`main.py`、`tui.py`）——舊版走 ADB broadcast，待重寫成 HTTP client
 
 ## 功能
 
@@ -143,9 +145,10 @@ brew install --cask android-platform-tools   # macOS
 - USB 線接好，手機彈出「允許 USB 偵錯」按允許
 - 或 Wi-Fi：`adb connect <手機 IP>:5555`
 
-### broadcast 完成但位置沒變
+### `POST /teleport` 回 200 但位置沒變
 - Mock GPS app 要在開發者選項「選擇模擬位置資訊應用程式」被選中
-- app 首頁應常駐通知顯示 `● Running`
+- app 通知列應顯示「Mock GPS · Running」
+- 確認 app 首頁顯示的 IP / port 跟你打的 URL 一致（換 Wi-Fi 後 IP 會變）
 
 ### Google Maps 位置反覆跳動
 Google Play Services 的 Fused Location Provider 混入 Wi-Fi/藍牙掃描結果。
@@ -169,17 +172,22 @@ warp/
     │   ├── java/dev/warp/mockgps/
     │   │   ├── MainActivity.kt
     │   │   ├── MockLocationService.kt   持續推送 mock location
-    │   │   └── TeleportReceiver.kt      接收 ADB broadcast
+    │   │   └── HttpServer.kt            LAN HTTP server (NanoHTTPD)
     │   └── res/
     └── build.gradle.kts
 ```
 
-**Broadcast 協定**
+**HTTP 協定**
 
-- Action（teleport）：`dev.warp.mockgps.TELEPORT`，extras：`--es lat <float>`、`--es lng <float>`
-- Action（stop）：`dev.warp.mockgps.STOP`
+Android app 啟動即在 port 8080 開 HTTP server。
 
-手機端 `TeleportReceiver` 收到後把座標轉交給 `MockLocationService`，服務每 500 ms 把位置推到 `gps` 與 `network` test providers。
+| Method | Path | Body | 說明 |
+|---|---|---|---|
+| `POST` | `/teleport` | `{"lat": <float>, "lng": <float>}` | 設定模擬位置，每 500 ms 推到 `gps` 與 `network` test providers |
+| `POST` | `/stop` | - | 停止推送（服務保持存活） |
+| `GET`  | `/status` | - | `{"running": bool, "lat": float?, "lng": float?, "lastTeleportAt": long?}` |
+
+所有 response 含 CORS headers，允許 browser 直接從網頁打。
 
 ## 免責聲明
 

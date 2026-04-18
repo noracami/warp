@@ -32,15 +32,6 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
-        <receiver
-            android:name=".TeleportReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="dev.warp.mockgps.TELEPORT" />
-                <action android:name="dev.warp.mockgps.STOP" />
-            </intent-filter>
-        </receiver>
-
     </application>
 
 </manifest>
