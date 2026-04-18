@@ -1,34 +1,126 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootContainer"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="24dp">
+    android:fillViewport="true">
 
-    <TextView
-        android:id="@+id/statusText"
+    <LinearLayout
+        android:orientation="vertical"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textSize="18sp"
-        android:fontFamily="monospace"
-        android:text="Starting..." />
+        android:padding="24dp">
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="24dp" />
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:fontFamily="monospace"
+            android:text="○ Waiting" />
 
-    <Button
-        android:id="@+id/openDevOptionsButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="開啟開發者選項" />
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="24dp" />
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:textSize="13sp"
-        android:textColor="#888"
-        android:text="在「選擇模擬位置資訊應用程式」中選擇本 app" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="#888"
+            android:text="Listening at" />
 
-</LinearLayout>
+        <LinearLayout
+            android:orientation="horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/ipText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textSize="16sp"
+                android:fontFamily="monospace"
+                android:gravity="center_vertical"
+                android:text="—" />
+
+            <Button
+                android:id="@+id/copyIpButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Copy" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="#888"
+            android:text="Current location" />
+
+        <TextView
+            android:id="@+id/locationText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="16sp"
+            android:fontFamily="monospace"
+            android:text="—" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textColor="#888"
+            android:text="Last teleport" />
+
+        <TextView
+            android:id="@+id/lastTeleportText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="16sp"
+            android:fontFamily="monospace"
+            android:text="—" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="32dp" />
+
+        <Button
+            android:id="@+id/openDevOptionsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="開啟開發者選項" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="13sp"
+            android:textColor="#888"
+            android:text="在「選擇模擬位置資訊應用程式」中選擇本 app" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
+        <Button
+            android:id="@+id/stopMockButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Stop mock" />
+
+    </LinearLayout>
+</ScrollView>

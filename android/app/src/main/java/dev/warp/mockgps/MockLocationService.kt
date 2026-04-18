@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class MockLocationService : Service() {
@@ -22,10 +23,13 @@ class MockLocationService : Service() {
     companion object {
         const val CHANNEL_ID = "mock_gps"
         const val NOTIF_ID = 1
+        const val ACTION_BOOT = "dev.warp.mockgps.internal.BOOT"
         const val ACTION_START = "dev.warp.mockgps.internal.START"
         const val ACTION_STOP = "dev.warp.mockgps.internal.STOP"
         const val EXTRA_LAT = "lat"
         const val EXTRA_LNG = "lng"
+
+        private const val TAG = "MockLocationService"
 
         private val PROVIDERS = listOf(
             LocationManager.GPS_PROVIDER,
@@ -34,10 +38,14 @@ class MockLocationService : Service() {
 
         @Volatile var isRunning: Boolean = false
         @Volatile var currentLocation: Pair<Double, Double>? = null
+        @Volatile var lastTeleportAt: Long = 0L
     }
 
     private lateinit var locationManager: LocationManager
     private val handler = Handler(Looper.getMainLooper())
+    private var isForegroundStarted = false
+    private var httpServer: HttpServer? = null
+
     private val pushRunnable = object : Runnable {
         override fun run() {
             pushMockLocation()
@@ -50,10 +58,12 @@ class MockLocationService : Service() {
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         createChannel()
         setupProviders()
+        startHttpServer()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_BOOT -> handleBoot()
             ACTION_START -> handleStart(intent)
             ACTION_STOP -> handleStop()
         }
@@ -65,9 +75,15 @@ class MockLocationService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(pushRunnable)
+        stopHttpServer()
         tearDownProviders()
         isRunning = false
         currentLocation = null
+        isForegroundStarted = false
+    }
+
+    private fun handleBoot() {
+        ensureForeground(buildWaitingNotification())
     }
 
     private fun handleStart(intent: Intent) {
@@ -75,22 +91,48 @@ class MockLocationService : Service() {
         val lng = intent.getDoubleExtra(EXTRA_LNG, Double.NaN)
         if (lat.isNaN() || lng.isNaN()) return
         currentLocation = lat to lng
+        lastTeleportAt = System.currentTimeMillis()
 
+        ensureForeground(buildRunningNotification(lat, lng))
         if (!isRunning) {
-            startForegroundCompat(buildNotification(lat, lng))
             isRunning = true
             handler.post(pushRunnable)
-        } else {
-            updateNotification(lat, lng)
         }
     }
 
     private fun handleStop() {
         handler.removeCallbacks(pushRunnable)
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        isRunning = false
         currentLocation = null
-        stopSelf()
+        isRunning = false
+        if (isForegroundStarted) {
+            val mgr = getSystemService(NotificationManager::class.java)
+            mgr.notify(NOTIF_ID, buildWaitingNotification())
+        }
+    }
+
+    private fun ensureForeground(notif: Notification) {
+        if (!isForegroundStarted) {
+            startForegroundCompat(notif)
+            isForegroundStarted = true
+        } else {
+            val mgr = getSystemService(NotificationManager::class.java)
+            mgr.notify(NOTIF_ID, notif)
+        }
+    }
+
+    private fun startHttpServer() {
+        if (httpServer != null) return
+        try {
+            httpServer = HttpServer(this).apply { start() }
+            Log.i(TAG, "HTTP server started on port ${HttpServer.DEFAULT_PORT}")
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to start HTTP server", e)
+        }
+    }
+
+    private fun stopHttpServer() {
+        httpServer?.stop()
+        httpServer = null
     }
 
     private fun setupProviders() {
@@ -109,7 +151,7 @@ class MockLocationService : Service() {
                 } else {
                     @Suppress("DEPRECATION")
                     locationManager.addTestProvider(
-                        p, false, false, false, false, true, true, true, 1, 1
+                        p, false, false, false, false, true, true, true, 1, 1,
                     )
                 }
                 locationManager.setTestProviderEnabled(p, true)
@@ -165,17 +207,21 @@ class MockLocationService : Service() {
         mgr.createNotificationChannel(ch)
     }
 
-    private fun buildNotification(lat: Double, lng: Double): Notification {
+    private fun buildWaitingNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Mock GPS running")
-            .setContentText("lat=$lat  lng=$lng")
+            .setContentTitle("Mock GPS · Waiting")
+            .setContentText("HTTP server :${HttpServer.DEFAULT_PORT}")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
             .build()
     }
 
-    private fun updateNotification(lat: Double, lng: Double) {
-        val mgr = getSystemService(NotificationManager::class.java)
-        mgr.notify(NOTIF_ID, buildNotification(lat, lng))
+    private fun buildRunningNotification(lat: Double, lng: Double): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Mock GPS · Running")
+            .setContentText("lat=$lat  lng=$lng")
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setOngoing(true)
+            .build()
     }
 }
