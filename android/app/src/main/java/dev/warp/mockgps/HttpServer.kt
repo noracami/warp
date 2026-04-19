@@ -1,6 +1,5 @@
 package dev.warp.mockgps
 
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
@@ -8,7 +7,7 @@ import fi.iki.elonen.NanoHTTPD
 import org.json.JSONObject
 
 class HttpServer(
-    private val context: Context,
+    private val service: MockLocationService,
     port: Int = DEFAULT_PORT,
 ) : NanoHTTPD(port) {
 
@@ -61,15 +60,15 @@ class HttpServer(
         val lat = obj.getDouble("lat")
         val lng = obj.getDouble("lng")
 
-        val intent = Intent(context, MockLocationService::class.java).apply {
+        val intent = Intent(service, MockLocationService::class.java).apply {
             action = MockLocationService.ACTION_START
             putExtra(MockLocationService.EXTRA_LAT, lat)
             putExtra(MockLocationService.EXTRA_LNG, lng)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
+            service.startForegroundService(intent)
         } else {
-            context.startService(intent)
+            service.startService(intent)
         }
         Log.i(TAG, "teleport lat=$lat lng=$lng")
 
@@ -77,20 +76,23 @@ class HttpServer(
     }
 
     private fun handleStop(): Response {
-        val intent = Intent(context, MockLocationService::class.java).apply {
+        val intent = Intent(service, MockLocationService::class.java).apply {
             action = MockLocationService.ACTION_STOP
         }
-        context.startService(intent)
+        service.startService(intent)
         Log.i(TAG, "stop")
         return cors(ok("""{"ok":true}"""))
     }
 
     private fun handleStatus(): Response {
+        service.retrySetupIfNeeded()
         val running = MockLocationService.isRunning
         val loc = MockLocationService.currentLocation
         val lastAt = MockLocationService.lastTeleportAt
+        val mockReady = MockLocationService.mockReady
         val json = JSONObject().apply {
             put("running", running)
+            put("mockReady", mockReady)
             if (loc != null) {
                 put("lat", loc.first)
                 put("lng", loc.second)

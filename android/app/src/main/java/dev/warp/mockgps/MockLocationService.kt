@@ -1,5 +1,6 @@
 package dev.warp.mockgps
 
+import android.app.AppOpsManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -14,6 +15,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -39,6 +41,7 @@ class MockLocationService : Service() {
         @Volatile var isRunning: Boolean = false
         @Volatile var currentLocation: Pair<Double, Double>? = null
         @Volatile var lastTeleportAt: Long = 0L
+        @Volatile var mockReady: Boolean = false
     }
 
     private lateinit var locationManager: LocationManager
@@ -135,7 +138,38 @@ class MockLocationService : Service() {
         httpServer = null
     }
 
+    private fun isSelectedAsMockProvider(): Boolean {
+        return try {
+            val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                appOps.unsafeCheckOpNoThrow(
+                    AppOpsManager.OPSTR_MOCK_LOCATION,
+                    Process.myUid(),
+                    packageName,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                appOps.checkOp(
+                    AppOpsManager.OPSTR_MOCK_LOCATION,
+                    Process.myUid(),
+                    packageName,
+                )
+            }
+            mode == AppOpsManager.MODE_ALLOWED
+        } catch (e: Exception) {
+            Log.w(TAG, "failed to check mock location appop", e)
+            false
+        }
+    }
+
+    @Synchronized
     private fun setupProviders() {
+        if (!isSelectedAsMockProvider()) {
+            Log.w(TAG, "this app is not selected as mock location provider")
+            mockReady = false
+            return
+        }
+        var ok = true
         for (p in PROVIDERS) {
             try {
                 if (locationManager.getProvider(p) != null) {
@@ -155,11 +189,20 @@ class MockLocationService : Service() {
                     )
                 }
                 locationManager.setTestProviderEnabled(p, true)
-            } catch (_: SecurityException) {
-                // App 尚未被選為 mock location provider，忽略
-            } catch (_: Exception) {
+            } catch (e: SecurityException) {
+                ok = false
+                Log.w(TAG, "not selected as mock provider for $p")
+            } catch (e: Exception) {
+                ok = false
+                Log.w(TAG, "failed to setup provider $p", e)
             }
         }
+        mockReady = ok
+    }
+
+    @Synchronized
+    fun retrySetupIfNeeded() {
+        if (!mockReady) setupProviders()
     }
 
     private fun tearDownProviders() {
@@ -169,6 +212,7 @@ class MockLocationService : Service() {
                 locationManager.removeTestProvider(p)
             } catch (_: Exception) {}
         }
+        mockReady = false
     }
 
     private fun pushMockLocation() {
