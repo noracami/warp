@@ -10,6 +10,7 @@
 | [04](04-cli-quick-teleport.md) | CLI Quick Teleport | 不開瀏覽器，terminal 一行快速傳送 |
 | [05](05-phone-app-home.md) | Phone App Home | Mock GPS app 首頁顯示狀態、IP、當前位置 |
 | [06](06-first-time-setup.md) | First-Time Setup | 朋友 clone repo 後從零跑起來的流程 |
+| [07](07-auto-plant.md) | Auto Plant | 設定圓形範圍內掛機隨機走動，自動種花 |
 
 ## 架構前提
 

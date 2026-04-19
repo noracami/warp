@@ -1,5 +1,6 @@
 export interface Status {
   running: boolean;
+  mockReady?: boolean;
   lat: number | null;
   lng: number | null;
   lastTeleportAt: number | null;
