@@ -4,14 +4,19 @@
   import Map from "./lib/Map.svelte";
   import { teleport, stopMock, getStatus } from "./lib/api";
   import { loadBaseUrl, saveBaseUrl } from "./lib/storage";
-  import { distanceMeters, moveTowards, randomInCircle, type LatLng } from "./lib/geo";
+  import type { LatLng } from "./lib/geo";
+  import type { Out as WorkerOut } from "./lib/plant-worker";
+  import { parseCoord } from "./lib/parse-coord";
 
   const GAME_ZOOM = 17;
   const CIRCLE_RADIUS_M = 300;
-  const SPEED_MPS = 4.44; // 16 km/h
   const TICK_MS = 1000;
-  const STEP_M = SPEED_MPS * (TICK_MS / 1000);
   const TRAIL_MAX = 200;
+  const SPEED_MIN_KMH = 15;
+  const SPEED_MAX_KMH = 20;
+  const SPEED_DEFAULT_KMH = 18;
+  const FAILURE_THRESHOLD = 3;
+  const ORIGINAL_TITLE = document.title;
 
   type PlantMode = "idle" | "arming" | "configured" | "running";
 
@@ -31,8 +36,19 @@
   let circleCenter = $state<LatLng | null>(null);
   let plantStats = $state<{ steps: number; distanceM: number; startedAt: number } | null>(null);
   let trail = $state<LatLng[]>([]);
-  let plantTimer: number | null = null;
-  let plantTarget: LatLng | null = null;
+  let speedKmh = $state(SPEED_DEFAULT_KMH);
+  let plantWorker: Worker | null = null;
+  let workerReady = $state(false);
+  let lastTickAt = $state<number | null>(null);
+  let nowTick = $state(Date.now());
+  let nowInterval: number | null = null;
+  let consecutiveFailures = 0;
+  let audioCtx: AudioContext | null = null;
+
+  let coordDraft = $state("");
+  let coordParse = $derived(parseCoord(coordDraft));
+  let phoneCoord = $state<LatLng | null>(null);
+  let coordCopied = $state(false);
 
   let circle = $derived(
     circleCenter
@@ -46,11 +62,34 @@
       const status = await getStatus(baseUrl);
       connected = true;
       mockReady = status.mockReady ?? null;
-      if (status.running && status.lat != null && status.lng != null && !marker) {
-        marker = [status.lat, status.lng];
+      if (status.running && status.lat != null && status.lng != null) {
+        phoneCoord = [status.lat, status.lng];
+        if (!marker) marker = [status.lat, status.lng];
+      } else {
+        phoneCoord = null;
       }
     } catch {
       // ignore; 下次操作會再試
+    }
+  }
+
+  $effect(() => {
+    if (!baseUrl) return;
+    const id = window.setInterval(refreshStatus, 10000);
+    return () => clearInterval(id);
+  });
+
+  async function copyPhoneCoord() {
+    if (!phoneCoord) return;
+    const text = `${phoneCoord[0].toFixed(6)}, ${phoneCoord[1].toFixed(6)}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      coordCopied = true;
+      setTimeout(() => {
+        coordCopied = false;
+      }, 1200);
+    } catch (e) {
+      errorMessage = `複製失敗：${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -83,6 +122,26 @@
     pending = [lat, lng];
   }
 
+  async function submitCoordInput() {
+    if (!coordParse.ok || !coordParse.coord || !baseUrl) return;
+    const [lat, lng] = coordParse.coord;
+    busy = true;
+    errorMessage = null;
+    try {
+      await teleport(baseUrl, lat, lng);
+      marker = [lat, lng];
+      pending = null;
+      coordDraft = "";
+      connected = true;
+      mapInstance?.setView([lat, lng]);
+    } catch (e) {
+      connected = false;
+      errorMessage = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function commitPending() {
     if (!pending || !baseUrl) return;
     const [lat, lng] = pending;
@@ -112,58 +171,197 @@
 
   function cancelPlantSession() {
     stopPlantingLoop();
+    restoreTitle();
     plantMode = "idle";
     circleCenter = null;
     plantStats = null;
-    plantTarget = null;
     trail = [];
   }
+
+  function userStopPlanting() {
+    restoreTitle();
+    stopPlantingLoop();
+  }
+
+  function ensureAudioCtx(): AudioContext {
+    if (!audioCtx) audioCtx = new AudioContext();
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+    return audioCtx;
+  }
+
+  function beep(): void {
+    try {
+      const ctx = ensureAudioCtx();
+      const now = ctx.currentTime;
+      for (let i = 0; i < 3; i++) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain).connect(ctx.destination);
+        osc.type = "square";
+        osc.frequency.value = 880;
+        const start = now + i * 0.25;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.3, start + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+        osc.start(start);
+        osc.stop(start + 0.2);
+      }
+    } catch (e) {
+      console.warn("beep failed", e);
+    }
+  }
+
+  function notifyUser(title: string, body: string): void {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      new Notification(title, { body, tag: "warp-auto-plant" });
+    } catch (e) {
+      console.warn("notification failed", e);
+    }
+  }
+
+  function flashTitle(prefix: string): void {
+    document.title = `${prefix} ${ORIGINAL_TITLE}`;
+  }
+
+  function restoreTitle(): void {
+    document.title = ORIGINAL_TITLE;
+  }
+
+  function triggerAlert(reason: string): void {
+    beep();
+    notifyUser("Warp · Auto-plant 已停止", reason);
+    flashTitle("⚠");
+    errorMessage = reason;
+  }
+
+  $effect(() => {
+    const handler = () => restoreTitle();
+    window.addEventListener("focus", handler);
+    return () => window.removeEventListener("focus", handler);
+  });
 
   function startPlantingLoop() {
     if (!circleCenter || !baseUrl) return;
     plantMode = "running";
     plantStats = { steps: 0, distanceM: 0, startedAt: Date.now() };
-    plantTarget = null;
     trail = [];
-    if (plantTimer != null) clearInterval(plantTimer);
-    plantTimer = window.setInterval(tick, TICK_MS);
-    tick();
+    lastTickAt = null;
+    consecutiveFailures = 0;
+    restoreTitle();
+    ensureAudioCtx();
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+
+    plantWorker?.terminate();
+    workerReady = false;
+    try {
+      plantWorker = new Worker(new URL("./lib/plant-worker.ts", import.meta.url), {
+        type: "module",
+      });
+    } catch (e) {
+      errorMessage = `Worker 建立失敗：${e instanceof Error ? e.message : String(e)}`;
+      plantMode = "configured";
+      return;
+    }
+    plantWorker.onmessage = (e: MessageEvent<WorkerOut>) => handleWorkerMessage(e.data);
+    plantWorker.onerror = (e: ErrorEvent) => {
+      const detail = `${e.message || "(無訊息)"} @ ${e.filename}:${e.lineno}:${e.colno}`;
+      errorMessage = `Worker 錯誤：${detail}`;
+      console.error("plant worker error", detail, e.error);
+    };
+    plantWorker.onmessageerror = (e: MessageEvent) => {
+      errorMessage = "Worker 訊息序列化失敗";
+      console.error("plant worker messageerror", e);
+    };
+    if (import.meta.env.DEV) {
+      import("./lib/dev-log").then(({ attachWorkerLogging }) =>
+        attachWorkerLogging(plantWorker!, "plant"),
+      );
+    }
+    console.info("plant worker created", {
+      baseUrl,
+      center: circleCenter,
+      speedMps: speedKmh / 3.6,
+    });
+    plantWorker.postMessage({
+      type: "start",
+      baseUrl,
+      center: $state.snapshot(circleCenter),
+      radius: CIRCLE_RADIUS_M,
+      speedMps: speedKmh / 3.6,
+      tickMs: TICK_MS,
+      initial: marker ? $state.snapshot(marker) : null,
+    });
+
+    if (nowInterval != null) clearInterval(nowInterval);
+    nowInterval = window.setInterval(() => {
+      nowTick = Date.now();
+    }, 500);
   }
 
   function stopPlantingLoop() {
-    if (plantTimer != null) {
-      clearInterval(plantTimer);
-      plantTimer = null;
+    if (plantWorker) {
+      plantWorker.postMessage({ type: "stop" });
+      plantWorker.terminate();
+      plantWorker = null;
     }
+    if (nowInterval != null) {
+      clearInterval(nowInterval);
+      nowInterval = null;
+    }
+    workerReady = false;
+    lastTickAt = null;
     if (plantMode === "running") plantMode = "configured";
   }
 
-  function tick() {
-    if (!circleCenter || !baseUrl) return;
-    const current: LatLng = marker ?? circleCenter;
-    if (!plantTarget || distanceMeters(current, plantTarget) <= STEP_M) {
-      plantTarget = randomInCircle(circleCenter, CIRCLE_RADIUS_M);
+  function handleWorkerMessage(msg: WorkerOut) {
+    if (msg.type === "ready") {
+      workerReady = true;
+      return;
     }
-    const next = moveTowards(current, plantTarget, STEP_M);
-    const stepDist = distanceMeters(current, next);
-    marker = next;
-    trail = [...trail, next].slice(-TRAIL_MAX);
+    if (msg.type === "fatal") {
+      errorMessage = `Worker fatal：${msg.error}`;
+      console.error("plant worker fatal", msg.error);
+      stopPlantingLoop();
+      return;
+    }
+    marker = msg.pos;
+    trail = [...trail, msg.pos].slice(-TRAIL_MAX);
     if (plantStats) {
       plantStats = {
         steps: plantStats.steps + 1,
-        distanceM: plantStats.distanceM + stepDist,
+        distanceM: plantStats.distanceM + msg.stepDist,
         startedAt: plantStats.startedAt,
       };
     }
-    teleport(baseUrl, next[0], next[1])
-      .then(() => {
-        connected = true;
-      })
-      .catch((e) => {
-        connected = false;
-        console.error("auto plant teleport failed", e);
-      });
+    lastTickAt = msg.at;
+    if (msg.ok) {
+      connected = true;
+      consecutiveFailures = 0;
+    } else {
+      connected = false;
+      consecutiveFailures += 1;
+      if (msg.error) {
+        errorMessage = `Teleport 失敗：${msg.error}`;
+        console.error("auto plant teleport failed", msg.error);
+      }
+      if (consecutiveFailures >= FAILURE_THRESHOLD) {
+        triggerAlert(
+          `連續 ${FAILURE_THRESHOLD} 次 teleport 失敗，已自動停止。檢查手機 Wi-Fi / Mock GPS app。`,
+        );
+        stopPlantingLoop();
+      }
+    }
   }
+
+  $effect(() => {
+    const mps = speedKmh / 3.6;
+    if (plantWorker && plantMode === "running") {
+      plantWorker.postMessage({ type: "update", speedMps: mps });
+    }
+  });
 
   function formatElapsed(ms: number): string {
     const total = Math.max(0, Math.floor(ms / 1000));
@@ -247,6 +445,51 @@
       </button>
     {/if}
 
+    <input
+      class="coord-input"
+      data-state={coordDraft === ""
+        ? "idle"
+        : coordParse.ok
+          ? "ok"
+          : coordParse.reason === "short-url-unsupported"
+            ? "short"
+            : "err"}
+      type="text"
+      placeholder="貼座標 / Maps URL ↵"
+      title={coordParse.ok && coordParse.coord
+        ? `${coordParse.coord[0]}, ${coordParse.coord[1]} (Enter 送出)`
+        : coordDraft === ""
+          ? "支援 lat,lng 或 Google/Apple Maps URL（短網址不支援）"
+          : coordParse.reason === "short-url-unsupported"
+            ? "短網址 (maps.app.goo.gl 等) 在瀏覽器無法解析，請先在手機展開"
+            : coordParse.reason === "out-of-range"
+              ? "超出範圍 (lat ±90, lng ±180)"
+              : "無法解析"}
+      bind:value={coordDraft}
+      onkeydown={(e) => {
+        if (e.key === "Enter") submitCoordInput();
+        if (e.key === "Escape") coordDraft = "";
+      }}
+    />
+
+    <button
+      class="coord-display"
+      data-state={coordCopied ? "copied" : phoneCoord ? "ok" : "idle"}
+      onclick={copyPhoneCoord}
+      disabled={!phoneCoord}
+      title={phoneCoord
+        ? `點擊複製 (${phoneCoord[0]}, ${phoneCoord[1]})`
+        : "尚未取得手機座標（每 10 秒同步一次）"}
+    >
+      {#if coordCopied}
+        ✓ Copied
+      {:else if phoneCoord}
+        📍 {phoneCoord[0].toFixed(5)}, {phoneCoord[1].toFixed(5)}
+      {:else}
+        📍 —
+      {/if}
+    </button>
+
     <button onclick={zoomToGame} title="跳到遊戲縮放等級（zoom {GAME_ZOOM}）">🎯 Game zoom</button>
     <button
       onclick={enterArming}
@@ -289,16 +532,40 @@
       <div class="auto-bar">
         <span class="coords">{circleCenter[0].toFixed(5)}, {circleCenter[1].toFixed(5)}</span>
         <span class="dim">· {CIRCLE_RADIUS_M} m</span>
+        <label class="speed">
+          <input
+            type="range"
+            min={SPEED_MIN_KMH}
+            max={SPEED_MAX_KMH}
+            step="0.5"
+            bind:value={speedKmh}
+          />
+          <span class="speed-val">{speedKmh.toFixed(1)} km/h</span>
+        </label>
         <button class="primary" onclick={startPlantingLoop}>▶ Start</button>
         <button onclick={cancelPlantSession}>× Cancel</button>
       </div>
     {:else if plantMode === "running" && plantStats}
-      <div class="auto-bar running">
-        <span>🌸 Running</span>
+      <div class="auto-bar running" class:warming={!workerReady}>
+        <span class="worker-pulse" title={workerReady ? "Worker ready" : "Worker booting..."}>●</span>
+        <span>🌸 {workerReady ? "Running" : "Starting..."}</span>
         <span class="dim">· {plantStats.steps} steps</span>
         <span class="dim">· {Math.round(plantStats.distanceM)} m</span>
-        <span class="dim">· {formatElapsed(Date.now() - plantStats.startedAt)}</span>
-        <button onclick={stopPlantingLoop}>⏹ Stop</button>
+        <span class="dim">· {formatElapsed(nowTick - plantStats.startedAt)}</span>
+        <span class="dim" title="Last worker tick">
+          · ↻ {lastTickAt ? `${Math.max(0, Math.round((nowTick - lastTickAt) / 100) / 10).toFixed(1)}s` : "…"}
+        </span>
+        <label class="speed">
+          <input
+            type="range"
+            min={SPEED_MIN_KMH}
+            max={SPEED_MAX_KMH}
+            step="0.5"
+            bind:value={speedKmh}
+          />
+          <span class="speed-val">{speedKmh.toFixed(1)} km/h</span>
+        </label>
+        <button onclick={userStopPlanting}>⏹ Stop</button>
       </div>
     {:else if pending}
       <div class="commit-bar">
@@ -396,6 +663,66 @@
   .url-input:focus {
     outline: none;
     border-color: #4b5563;
+  }
+
+  .coord-input {
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: ui-monospace, monospace;
+    border: 1px solid #2a2d35;
+    background: #0f1116;
+    color: #e5e7eb;
+    border-radius: 4px;
+    min-width: 200px;
+    transition: border-color 0.15s;
+  }
+
+  .coord-input:focus {
+    outline: none;
+    border-color: #4b5563;
+  }
+
+  .coord-input[data-state="ok"] {
+    border-color: rgba(34, 197, 94, 0.6);
+    color: #86efac;
+  }
+
+  .coord-input[data-state="err"] {
+    border-color: rgba(239, 68, 68, 0.5);
+    color: #fca5a5;
+  }
+
+  .coord-input[data-state="short"] {
+    border-color: rgba(245, 158, 11, 0.5);
+    color: #fde68a;
+  }
+
+  .coord-display {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    padding: 6px 10px;
+    border: 1px solid #2a2d35;
+    background: #0f1116;
+    color: #d1d5db;
+    border-radius: 4px;
+    cursor: pointer;
+    min-width: 180px;
+    text-align: center;
+  }
+
+  .coord-display:hover:not(:disabled) {
+    background: #2a2d35;
+    color: #f3f4f6;
+  }
+
+  .coord-display[data-state="copied"] {
+    color: #4ade80;
+    border-color: rgba(34, 197, 94, 0.5);
+  }
+
+  .coord-display[data-state="idle"] {
+    color: #6b7280;
   }
 
   .url-button {
@@ -534,6 +861,46 @@
     box-shadow:
       0 6px 20px rgba(0, 0, 0, 0.5),
       0 0 0 1px rgba(34, 197, 94, 0.2);
+  }
+
+  .worker-pulse {
+    color: #22c55e;
+    animation: worker-pulse 1s ease-in-out infinite;
+  }
+
+  .auto-bar.warming .worker-pulse {
+    color: #f59e0b;
+  }
+
+  .auto-bar.warming {
+    border-color: rgba(245, 158, 11, 0.5);
+  }
+
+  @keyframes worker-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .speed {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: 6px;
+    border-left: 1px solid #2a2d35;
+    margin-left: 2px;
+  }
+
+  .speed input[type="range"] {
+    width: 90px;
+    accent-color: #22c55e;
+  }
+
+  .speed-val {
+    font-family: ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    color: #d1d5db;
+    font-size: 12px;
+    min-width: 64px;
   }
 
   .mock-warning {
