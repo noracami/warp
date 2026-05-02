@@ -52,6 +52,10 @@
   let coordParse = $derived(parseCoord(coordDraft));
   let phoneCoord = $state<LatLng | null>(null);
   let coordCopied = $state(false);
+  let showWater = $state(false);
+  let waterStatus = $state<{ kind: "idle" | "loading" | "ok" | "zoom-in" | "error"; info?: string }>({
+    kind: "idle",
+  });
 
   let circle = $derived(
     circleCenter
@@ -521,6 +525,23 @@
       {/if}
     </button>
 
+    <button
+      class="water-toggle"
+      data-active={showWater}
+      onclick={() => (showWater = !showWater)}
+      title={showWater
+        ? `關閉河流圖層${waterStatus.info ? `（${waterStatus.info}）` : ""}`
+        : "顯示河流 / 水體（zoom 13+）"}
+    >
+      🌊
+      {#if showWater}
+        {#if waterStatus.kind === "loading"}<span class="water-dim">…</span>
+        {:else if waterStatus.kind === "zoom-in"}<span class="water-dim">⤢</span>
+        {:else if waterStatus.kind === "error"}<span class="water-err">!</span>
+        {/if}
+      {/if}
+    </button>
+
     <button onclick={zoomToGame} title="跳到遊戲縮放等級（zoom {GAME_ZOOM}）">🎯 Game zoom</button>
     <button
       onclick={enterArming}
@@ -538,9 +559,11 @@
       {pending}
       {circle}
       {trail}
+      {showWater}
       onMapClick={handleMapClick}
       onPendingCommit={commitPending}
       onReady={(m) => (mapInstance = m)}
+      onWaterStatus={(kind, info) => (waterStatus = { kind, info })}
     />
 
     {#if mockReady === false}
@@ -754,6 +777,23 @@
 
   .coord-display[data-state="idle"] {
     color: #6b7280;
+  }
+
+  .water-toggle[data-active="true"] {
+    background: rgba(56, 189, 248, 0.15);
+    border-color: rgba(56, 189, 248, 0.5);
+    color: #7dd3fc;
+  }
+
+  .water-dim {
+    color: #9ca3af;
+    font-size: 11px;
+    margin-left: 2px;
+  }
+
+  .water-err {
+    color: #fca5a5;
+    margin-left: 2px;
   }
 
   .url-button {

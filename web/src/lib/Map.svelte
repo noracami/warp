@@ -3,6 +3,7 @@
   import L from "leaflet";
   import "leaflet/dist/leaflet.css";
   import { loadMapView, saveMapView } from "./storage";
+  import { fetchWaterFeatures, type Bbox } from "./overpass";
 
   interface Circle {
     center: [number, number];
@@ -15,11 +16,26 @@
     pending: [number, number] | null;
     circle: Circle | null;
     trail: [number, number][];
+    showWater: boolean;
     onMapClick: (lat: number, lng: number) => void;
     onPendingCommit: () => void;
     onReady?: (map: L.Map) => void;
+    onWaterStatus?: (status: "idle" | "loading" | "ok" | "zoom-in" | "error", info?: string) => void;
   }
-  let { marker, pending, circle, trail, onMapClick, onPendingCommit, onReady }: Props = $props();
+  let {
+    marker,
+    pending,
+    circle,
+    trail,
+    showWater,
+    onMapClick,
+    onPendingCommit,
+    onReady,
+    onWaterStatus,
+  }: Props = $props();
+
+  const WATER_MIN_ZOOM = 13;
+  const WATER_DEBOUNCE_MS = 800;
 
   let container: HTMLDivElement;
   let map: L.Map | undefined;
@@ -28,6 +44,9 @@
   let circleLayer: L.Circle | undefined;
   let trailBuckets: L.Polyline[] = [];
   let resizeObserver: ResizeObserver | undefined;
+  let waterLayer: L.GeoJSON | undefined;
+  let waterDebounceTimer: number | undefined;
+  let waterFetchToken = 0;
 
   const TRAIL_BUCKETS = 8;
 
@@ -67,6 +86,9 @@
   onDestroy(() => {
     resizeObserver?.disconnect();
     resizeObserver = undefined;
+    if (waterDebounceTimer != null) clearTimeout(waterDebounceTimer);
+    waterLayer?.remove();
+    waterLayer = undefined;
     for (const b of trailBuckets) b.remove();
     trailBuckets = [];
     map?.remove();
@@ -136,6 +158,68 @@
       const end = Math.min(N, (i + 1) * size + 1);
       trailBuckets[i].setLatLngs(start < N ? trail.slice(start, end) : []);
     }
+  });
+
+  function scheduleWaterFetch() {
+    if (waterDebounceTimer != null) clearTimeout(waterDebounceTimer);
+    waterDebounceTimer = window.setTimeout(runWaterFetch, WATER_DEBOUNCE_MS);
+  }
+
+  async function runWaterFetch() {
+    if (!map) return;
+    const zoom = map.getZoom();
+    if (zoom < WATER_MIN_ZOOM) {
+      waterLayer?.clearLayers();
+      onWaterStatus?.("zoom-in", `放大到 zoom ${WATER_MIN_ZOOM}+ 才會載入`);
+      return;
+    }
+    const b = map.getBounds();
+    const bbox: Bbox = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
+    const token = ++waterFetchToken;
+    onWaterStatus?.("loading");
+    try {
+      const fc = await fetchWaterFeatures(bbox);
+      if (token !== waterFetchToken || !map) return;
+      if (!waterLayer) {
+        waterLayer = L.geoJSON(undefined, {
+          style: (feature) => {
+            const isPolygon = feature?.geometry?.type === "Polygon";
+            return isPolygon
+              ? { color: "#38bdf8", weight: 1, fillColor: "#0ea5e9", fillOpacity: 0.35 }
+              : { color: "#38bdf8", weight: 2.5, opacity: 0.85 };
+          },
+          interactive: false,
+        }).addTo(map);
+      } else {
+        waterLayer.clearLayers();
+      }
+      waterLayer.addData(fc);
+      onWaterStatus?.("ok", `${fc.features.length} 個物件`);
+    } catch (e) {
+      if (token !== waterFetchToken) return;
+      onWaterStatus?.("error", e instanceof Error ? e.message : String(e));
+      console.warn("water overlay fetch failed", e);
+    }
+  }
+
+  $effect(() => {
+    if (!map) return;
+    if (!showWater) {
+      if (waterDebounceTimer != null) {
+        clearTimeout(waterDebounceTimer);
+        waterDebounceTimer = undefined;
+      }
+      waterFetchToken++;
+      waterLayer?.remove();
+      waterLayer = undefined;
+      onWaterStatus?.("idle");
+      return;
+    }
+    map.on("moveend zoomend", scheduleWaterFetch);
+    runWaterFetch();
+    return () => {
+      map?.off("moveend zoomend", scheduleWaterFetch);
+    };
   });
 
   $effect(() => {
