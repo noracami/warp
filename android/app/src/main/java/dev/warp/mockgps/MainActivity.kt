@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
         lastTeleportText = findViewById(R.id.lastTeleportText)
 
         findViewById<Button>(R.id.openDevOptionsButton).setOnClickListener { openDeveloperOptions() }
+        findViewById<Button>(R.id.openLocationSettingsButton).setOnClickListener { openLocationSettings() }
         findViewById<Button>(R.id.stopMockButton).setOnClickListener { stopMock() }
         findViewById<Button>(R.id.copyIpButton).setOnClickListener { copyIpToClipboard() }
 
@@ -102,6 +103,14 @@ class MainActivity : AppCompatActivity() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Warp URL", url))
         Toast.makeText(this, "已複製：$url", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun openLocationSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "無法開啟定位設定", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun openDeveloperOptions() {

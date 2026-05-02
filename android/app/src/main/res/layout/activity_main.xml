@@ -117,6 +117,24 @@
             android:layout_height="16dp" />
 
         <Button
+            android:id="@+id/openLocationSettingsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="開啟定位設定" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="13sp"
+            android:textColor="#888"
+            android:text="若遊戲位置亂跳：定位服務 → 關閉「定位精準度」" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
+        <Button
             android:id="@+id/stopMockButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
