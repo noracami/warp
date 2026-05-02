@@ -3,7 +3,7 @@
   import type L from "leaflet";
   import Map from "./lib/Map.svelte";
   import { teleport, stopMock, getStatus } from "./lib/api";
-  import { loadBaseUrl, saveBaseUrl } from "./lib/storage";
+  import { loadBaseUrl, saveBaseUrl, loadRecentUrls, saveRecentUrls, pushRecentUrl } from "./lib/storage";
   import type { LatLng } from "./lib/geo";
   import type { Out as WorkerOut } from "./lib/plant-worker";
   import { parseCoord } from "./lib/parse-coord";
@@ -21,9 +21,12 @@
   type PlantMode = "idle" | "arming" | "configured" | "running";
 
   const initialUrl = loadBaseUrl();
+  const initialRecent = pushRecentUrl(loadRecentUrls(), initialUrl);
   let baseUrl = $state(initialUrl);
   let urlDraft = $state(initialUrl);
   let editing = $state(initialUrl === "");
+  let recentUrls = $state<string[]>(initialRecent);
+  let recentToShow = $derived(recentUrls.filter((u) => u !== baseUrl).slice(0, 3));
   let marker = $state<LatLng | null>(null);
   let pending = $state<LatLng | null>(null);
   let connected = $state<boolean | null>(null);
@@ -390,15 +393,34 @@
   function commitUrl() {
     const trimmed = urlDraft.trim();
     if (!trimmed) return;
-    baseUrl = trimmed;
-    saveBaseUrl(trimmed);
+    applyUrl(trimmed);
     editing = false;
-    connected = null;
   }
 
   function editUrl() {
     urlDraft = baseUrl;
     editing = true;
+  }
+
+  function applyUrl(url: string) {
+    baseUrl = url;
+    saveBaseUrl(url);
+    recentUrls = pushRecentUrl(recentUrls, url);
+    saveRecentUrls(recentUrls);
+    connected = null;
+    phoneCoord = null;
+    refreshStatus();
+  }
+
+  function switchToUrl(url: string) {
+    if (url === baseUrl) return;
+    urlDraft = url;
+    applyUrl(url);
+    editing = false;
+  }
+
+  function shortUrl(url: string): string {
+    return url.replace(/^https?:\/\//, "");
   }
 
   function dismissError() {
@@ -443,6 +465,15 @@
       <button class="url-button" onclick={editUrl} title="Click to edit">
         {baseUrl}
       </button>
+      {#each recentToShow as url (url)}
+        <button
+          class="url-recent"
+          onclick={() => switchToUrl(url)}
+          title={`切換至 ${url}`}
+        >
+          {shortUrl(url)}
+        </button>
+      {/each}
     {/if}
 
     <input
@@ -739,6 +770,23 @@
   .url-button:hover {
     background: #2a2d35;
     color: #f3f4f6;
+  }
+
+  .url-recent {
+    background: transparent;
+    border: 1px dashed #2a2d35;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #6b7280;
+  }
+
+  .url-recent:hover:not(:disabled) {
+    background: #1a1d24;
+    border-style: solid;
+    color: #d1d5db;
   }
 
   button {
